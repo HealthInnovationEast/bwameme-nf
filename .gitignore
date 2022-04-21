@@ -41,3 +41,5 @@ results/
 /tmp/
 /.venv/
 /orig.*
+# temporary allow of the empty files, switch out later
+!/testdata/*.fq.gz

@@ -1,2 +1,4 @@
-sample_name,file_path
-somename,somepath
+rgId,rgLb,rgPl,rgSm,rgPu,read1,read2
+1,sampA_lib,ILLUMINA,sampA,R1_L1,testdata/1_1.fq.gz,testdata/1_2.fq.gz
+2,sampA_lib,ILLUMINA,sampA,R1_L2,testdata/2_1.fq.gz,testdata/2_2.fq.gz
+3,sampA_lib,ILLUMINA,sampA,R1_L3,testdata/3_1.fq.gz,testdata/3_2.fq.gz
