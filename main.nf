@@ -30,50 +30,62 @@ if (params.help) {
 projectDir = workflow.projectDir
 ch_run_sh_script = Channel.fromPath("${projectDir}/bin/run.sh")
 
-// Define Channels from input
+ch_fa = Channel.value(file(params.genome_fasta))
+ch_fai = Channel.value(file("${params.genome_fasta}.fai"))
+ch_alt = Channel.value(file("${params.genome_fasta}.alt"))
+
+outfmt_uc = params.format.toUpperCase()
+outfmt_lc = params.format.toLowerCase()
+
 Channel
-    .fromPath(params.input)
-    .ifEmpty { exit 1, "Cannot find input file : ${params.input}" }
-    .splitCsv(skip:1)
-    .map {sample_name, file_path -> [ sample_name, file_path ] }
-    .set { ch_input }
+  .fromPath(params.input)
+  .splitCsv(header:true)
+  .map{ row-> tuple(row.rgId, row.rgLb, row.rgPl, row.rgSm, row.rgPu, file(row.read1), file(row.read2)) }
+  .set { fqpair_ch }
 
-// Define Process
-process step_1 {
-    tag "$sample_name"
-    label 'low_memory'
-    publishDir "${params.outdir}", mode: 'copy'
-
-    input:
-    set val(sample_name), file(input_file) from ch_input
-    file(run_sh_script) from ch_run_sh_script
+process bwamem2_postalt {
+  input:
+    set rgId, rgLb, rgPl, rgSm, rgPu, file(read1), file(read2) from fqpair_ch
+    file(fasta) from ch_fa
+    file(alt) from ch_alt
     
-    output:
-    file "input_file_head.txt" into ch_out
+  output:
+    // stdout result
+    file("sorted.bam") into sorted_ch
 
-    script:
+  script:
+    def cpus = params.cpus
+    def bwamem = "bwa-mem2 mem -K 10000000 -R '@RG\\tID:$rgId\\tLB:$rgLb\\tPL:$rgPl\\tSM:$rgSm\\tPU:$rgPu' -t $cpus $fasta $read1 $read2"
+    def postalt = "k8 bwa-postalt.js $alt"
+    def fixmate = "samtools fixmate -m --output-fmt bam,level=0 -@ $cpus - -"
+    def sort = "samtools sort -m 2G --output-fmt bam,level=1 -T sorttmp -@ $cpus -"
+
     """
-    run.sh
-    head $input_file > input_file_head.txt
-    """
-  }
-
-ch_report_dir = Channel.value(file("${projectDir}/bin/report"))
-
-process report {
-    publishDir "${params.outdir}/MultiQC", mode: 'copy'
-
-    input:
-    file(report_dir) from ch_report_dir
-    file(table) from ch_out
-    
-    output:
-    file "multiqc_report.html" into ch_multiqc_report
-
-    script:
-    """
-    cp -r ${report_dir}/* .
-    Rscript -e "rmarkdown::render('report.Rmd',params = list(res_table='$table'))"
-    mv report.html multiqc_report.html
+    rm -f sorttmp*
+    set -o pipefail
+    echo "$bwamem | $postalt | $fixmate | $sort" > sorted.bam
     """
 }
+
+sorted_ch = sorted_ch.view { print it }
+
+process samtools_markdup {
+  input:
+    file '*.bam' from sorted_ch.collect()
+  
+  output:
+    stdout result
+  
+  script:
+    def cpus = params.cpus
+    def outidx = outfmt_lc == 'cram' ? 'cram.crai' : 'bam.bai'
+    """
+    rm -f marked.*
+    CLEANED=`ls -m *.bam | tr -d ','`
+    echo "samtools markdup --write-index --mode s --output-fmt $outfmt_uc -S --include-fails -T marktmp -@ $cpus -f markdup.met \$CLEANED marked.${outfmt_lc}##idx##marked.${outidx}"
+    """
+}
+
+result.view { it.trim() }
+
+

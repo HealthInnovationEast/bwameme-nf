@@ -36,3 +36,8 @@ results/
 
 *.csv
 *.txt
+
+# other
+/tmp/
+/.venv/
+/orig.*
