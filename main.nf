@@ -4,10 +4,21 @@ def helpMessage() {
     log.info """
     Usage:
     The typical command for running the pipeline is as follows:
-    nextflow run main.nf --bams sample.bam [Options]
+
+    nextflow run main.nf --genome_fasta genome.fasta --input data.csv [Options]
     
-    Inputs Options:
-    --input         Input file
+    Required Arguments:
+    --input         Input CSV, see end for format
+    --genome_fasta  Reference genome fasta, other files based on dropping extension or appending:
+                     - genome.fa - provide path to this file
+                     - genome.dict
+                     - genome.fa.{0123,alt,amb,ann,pac}
+                     - genome.fa.{bwt.2bit.64,pos_packed}
+                     - genome.fa.suffixarray_uint64_L{1,2}_PARAMETERS
+
+    Options:
+    --outdir        Directory for final results [results]
+    --format        Final output as bam or cram [bam]
 
     Resource Options:
     --max_cpus      Maximum number of CPUs (int)
@@ -30,9 +41,20 @@ if (params.help) {
 projectDir = workflow.projectDir
 ch_run_sh_script = Channel.fromPath("${projectDir}/bin/run.sh")
 
+faFile = file(params.genome_fasta)
+ch_dict = Channel.value(file("${faFile.getParent()}/${faFile.baseName}.dict")) // reheader
+
 ch_fa = Channel.value(file(params.genome_fasta))
-ch_fai = Channel.value(file("${params.genome_fasta}.fai"))
-ch_alt = Channel.value(file("${params.genome_fasta}.alt"))
+
+ch_0123 = Channel.value(file("${params.genome_fasta}.0123")) // bwa-mem2, bwa-meme
+ch_alt = Channel.value(file("${params.genome_fasta}.alt")) // bwa-mem2, bwa-meme
+ch_amb = Channel.value(file("${params.genome_fasta}.amb")) // bwa-mem2, bwa-meme
+ch_ann = Channel.value(file("${params.genome_fasta}.ann")) // bwa-mem2, bwa-meme
+ch_bwt2bit = Channel.value(file("${params.genome_fasta}.bwt.2bit.64")) // bwa-mem2, bwa-meme
+ch_pac = Channel.value(file("${params.genome_fasta}.pac")) // bwa-mem2, bwa-meme
+ch_pos = Channel.value(file("${params.genome_fasta}.pos_packed")) // bwa-meme
+ch_L1 = Channel.value(file("${params.genome_fasta}.suffixarray_uint64_L1_PARAMETERS")) // bwa-meme
+ch_L2 = Channel.value(file("${params.genome_fasta}.suffixarray_uint64_L2_PARAMETERS")) // bwa-meme
 
 outfmt_uc = params.format.toUpperCase()
 outfmt_lc = params.format.toLowerCase()
@@ -43,49 +65,80 @@ Channel
   .map{ row-> tuple(row.rgId, row.rgLb, row.rgPl, row.rgSm, row.rgPu, file(row.read1), file(row.read2)) }
   .set { fqpair_ch }
 
-process bwamem2_postalt {
+
+process bwamem {
   input:
     set rgId, rgLb, rgPl, rgSm, rgPu, file(read1), file(read2) from fqpair_ch
     file(fasta) from ch_fa
+    file(zero123) from ch_0123
     file(alt) from ch_alt
-    
-  output:
-    // stdout result
-    file("sorted.bam") into sorted_ch
+    file(amb) from ch_amb
+    file(ann) from ch_ann
+    file(bwt2bit) from ch_bwt2bit
+    file(pac) from ch_pac
+    file(pospack) from ch_pos
+    file(l_one) from  ch_L1
+    file(l_two) from ch_L2
+    file(dict) from ch_dict
 
+  output:
+    file 'sorted.bam' into sorted_ch
+    file '.command.*'
+  
+  publishDir path: "${params.outdir}/logs/${task.process}/${task.index}",
+    mode: 'copy',
+    overwrite: true,
+    enabled: true,
+    pattern: '.command.*',
+    saveAs: { "command.${file(it).getExtension()}" }
+  
   script:
-    def cpus = params.cpus
-    def bwamem = "bwa-mem2 mem -K 10000000 -R '@RG\\tID:$rgId\\tLB:$rgLb\\tPL:$rgPl\\tSM:$rgSm\\tPU:$rgPu' -t $cpus $fasta $read1 $read2"
-    def postalt = "k8 bwa-postalt.js $alt"
-    def fixmate = "samtools fixmate -m --output-fmt bam,level=0 -@ $cpus - -"
-    def sort = "samtools sort -m 2G --output-fmt bam,level=1 -T sorttmp -@ $cpus -"
+    // 'bwa-meme mem' without '-7' behaves like 'bwa-mem2 mem'
+    def bwamem = "bwa-meme mem -7 -K 100000000 -R '@RG\\tID:$rgId\\tLB:$rgLb\\tPL:$rgPl\\tSM:$rgSm\\tPU:$rgPu' -t ${task.cpus} $fasta $read1 $read2"
+    def fixmate = "samtools fixmate -m --output-fmt bam,level=0 -@ 1 - -"
+    def reheader = "samtools reheader -c 'grep -v ^@SQ > tmp-head && cat $dict tmp-head' -"
+    def sort = "samtools sort -m 1G --output-fmt bam,level=1 -T ./sorttmp -@ ${task.cpus} -"
+
+    def command = "$bwamem | $fixmate | $reheader | $sort > sorted.bam"
 
     """
     rm -f sorttmp*
     set -o pipefail
-    echo "$bwamem | $postalt | $fixmate | $sort" > sorted.bam
+    $command
     """
 }
-
-sorted_ch = sorted_ch.view { print it }
 
 process samtools_markdup {
   input:
-    file '*.bam' from sorted_ch.collect()
+    // ? is due to odd behaviour in collect when only 1 file received, you get a file of just `.bam`
+    file 'sorted_?.bam' from sorted_ch.collect()
+    file('genome.fa') from ch_fa
   
   output:
-    stdout result
+    file 'marked.*' into result
+
+  publishDir path: "${params.outdir}/logs/${task.name}/${task.index}", mode: 'copy', overwrite: true, enabled: true, pattern: '.command*'
+  publishDir path: "${params.outdir}", mode: 'move', overwrite: true, enabled: true
   
   script:
-    def cpus = params.cpus
+    // @TODO merge needs to only be applied if more than one file
+    
     def outidx = outfmt_lc == 'cram' ? 'cram.crai' : 'bam.bai'
+    def cram_fa = outfmt_lc == 'cram' ? ',reference=genome.fa' : ''
+    def merge = "samtools merge -u -@ ${task.cpus} - sorted_*.bam"
+    def markdup = "samtools markdup --write-index --mode s --output-fmt ${outfmt_uc}${cram_fa} -S --include-fails -T ./marktmp -@ ${task.cpus} -s -f marked.met \$MARK_IN marked.${outfmt_lc}##idx##marked.${outidx}"
     """
-    rm -f marked.*
-    CLEANED=`ls -m *.bam | tr -d ','`
-    echo "samtools markdup --write-index --mode s --output-fmt $outfmt_uc -S --include-fails -T marktmp -@ $cpus -f markdup.met \$CLEANED marked.${outfmt_lc}##idx##marked.${outidx}"
+    rm -f marked.* marktmp*
+    set -o pipefail
+    INPUTS=`ls -1 sorted_*.bam | wc -l`
+    if [[ \$INPUTS -eq 1 ]]; then
+      MARK_IN='sorted_1.bam'
+      $markdup
+    else
+      MARK_IN='-'
+      $merge | $markdup
+    fi
     """
 }
-
-result.view { it.trim() }
 
 

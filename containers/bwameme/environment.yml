@@ -5,6 +5,5 @@ channels:
   - defaults
 dependencies:
   - nano
-  - bwa-mem2=2.2.1
-  - bwakit=0.7.17.dev1
+  - bwa-meme=1.0.4
   - samtools=1.15.1
