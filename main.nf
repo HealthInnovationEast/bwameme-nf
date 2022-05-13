@@ -1,7 +1,5 @@
 #!/usr/bin/env nextflow
 
-nextflow.enable.dsl=1
-
 def helpMessage() {
     log.info """
     Usage:
