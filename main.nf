@@ -1,5 +1,7 @@
 #!/usr/bin/env nextflow
 
+nextflow.enable.dsl=1
+
 def helpMessage() {
     log.info """
     Usage:
@@ -19,6 +21,8 @@ def helpMessage() {
     Options:
     --outdir        Directory for final results [results]
     --format        Final output as bam or cram [bam]
+    --bp_in_batch   Input bases in each batch see bwa/bwa-mem2/bwa-meme
+                    (for reproducibility) [100000000]
 
     Resource Options:
     --max_cpus      Maximum number of CPUs (int)
@@ -94,10 +98,10 @@ process bwamem {
   
   script:
     // 'bwa-meme mem' without '-7' behaves like 'bwa-mem2 mem'
-    def bwamem = "bwa-meme mem -7 -K 100000000 -R '@RG\\tID:$rgId\\tLB:$rgLb\\tPL:$rgPl\\tSM:$rgSm\\tPU:$rgPu' -t ${task.cpus} $fasta $read1 $read2"
+    def bwamem = "bwa-meme mem -7 -K ${params.bp_in_batch} -R '@RG\\tID:$rgId\\tLB:$rgLb\\tPL:$rgPl\\tSM:$rgSm\\tPU:$rgPu' -t ${task.cpus} $fasta $read1 $read2"
     def fixmate = "samtools fixmate -m --output-fmt bam,level=0 -@ 1 - -"
     def reheader = "samtools reheader -c 'grep -v ^@SQ > tmp-head && cat $dict tmp-head' -"
-    def sort = "samtools sort -m 1G --output-fmt bam,level=1 -T ./sorttmp -@ ${task.cpus} -"
+    def sort = "samtools sort --output-fmt bam,level=1 -T ./sorttmp -@ ${task.cpus} -"
 
     def command = "$bwamem | $fixmate | $reheader | $sort > sorted.bam"
 
