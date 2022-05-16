@@ -6,7 +6,7 @@ The `bwa-meme` implementation of mapping and duplicate removal.
 
 ## Pipeline description
 
-Performs mapping using the `bwa mem` algorithm which significant performance enhancements.
+Performs mapping using the `bwa mem` algorithm with significant performance enhancements.
 
 `bwa-meme` is based on `bwa-mem2` with further improvements by learned index.
 
