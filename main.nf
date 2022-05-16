@@ -19,7 +19,7 @@ def helpMessage() {
     Options:
     --outdir        Directory for final results [results]
     --format        Final output as bam or cram [bam]
-    --bp_in_batch   Input bases in each batch see bwa/bwa-mem2/bwa-meme
+    --bp_in_batch   Input bases in each batch see bwa/bwa-mem2/bwa-meme -K
                     (for reproducibility) [100000000]
 
     Resource Options:
